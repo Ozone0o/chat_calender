@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日程信息提取</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        #textInput {
+            width: 100%;
+            height: 120px;
+            margin: 10px 0;
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            resize: vertical;
+        }
+        #askButton {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        #askButton:hover {
+            background-color: #45a049;
+        }
+        #askButton:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .result-container {
+            margin-top: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+        }
+        .result-item {
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
+        }
+        .result-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        .result-label {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .result-value {
+            color: #666;
+        }
+        .loading {
+            color: #666;
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }
+        .error {
+            color: #d32f2f;
+            padding: 10px;
+            background-color: #ffebee;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>日程信息提取</h2>
+        <textarea id="textInput" placeholder="请输入日程文本，例如：明天下午3点在会议室A举行项目启动会，会议将讨论新产品的开发计划和人员分工。"></textarea>
+        <button id="askButton">提取信息</button>
+        <div id="resultContainer" class="result-container" style="display: none;"></div>
+    </div>
+
+    <script>
+        const textInput = document.getElementById('textInput');
+        const askButton = document.getElementById('askButton');
+        const resultContainer = document.getElementById('resultContainer');
+
+        askButton.addEventListener('click', async () => {
+            const text = textInput.value;
+            if (!text) {
+                alert('请输入文本');
+                return;
+            }
+
+            // 禁用按钮
+            askButton.disabled = true;
+            
+            // 显示加载状态
+            resultContainer.style.display = 'block';
+            resultContainer.innerHTML = '<div class="loading">正在提取信息...</div>';
+
+            try {
+                const response = await fetch('/extract', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ text: text })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    resultContainer.innerHTML = `<div class="error">错误: ${data.error}</div>`;
+                    return;
+                }
+
+                // 更新结果
+                resultContainer.innerHTML = `
+                    <div class="result-item">
+                        <div class="result-label">日程名称</div>
+                        <div class="result-value">${data.event_name || '无'}</div>
+                    </div>
+                    <div class="result-item">
+                        <div class="result-label">时间</div>
+                        <div class="result-value">${data.time || '无'}</div>
+                    </div>
+                    <div class="result-item">
+                        <div class="result-label">地点</div>
+                        <div class="result-value">${data.location || '无'}</div>
+                    </div>
+                    <div class="result-item">
+                        <div class="result-label">流程</div>
+                        <div class="result-value">${data.process || '无'}</div>
+                    </div>
+                `;
+
+            } catch (error) {
+                resultContainer.innerHTML = `<div class="error">连接错误，请检查服务器是否运行</div>`;
+            } finally {
+                askButton.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html> 

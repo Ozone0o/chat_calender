@@ -1,14 +1,19 @@
 import json
 import logging
 import re
-from flask import Flask, request, Response
+from flask import Flask, request, Response, render_template, jsonify
+from flask_cors import CORS
 from ollama import Client
 
 # 配置日志
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app)  # 启用CORS支持
 
 # ollama客户端
 ollama_url = "http://localhost:11434"   # localhost可以换成你部署ollama主机的ip、远程ip
@@ -20,78 +25,110 @@ def remove_think_tags(text):
     """移除<think>标签及其内容"""
     return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
 
-# 系统提示词
-system_prompt = """你是一个日程信息提取助手。请严格按照以下格式输出，不要有任何解释、思考过程或其他内容。
+def clean_json_response(text):
+    """清理JSON响应中的Markdown格式"""
+    # 移除```json和```标记
+    text = re.sub(r'```json\n?', '', text)
+    text = re.sub(r'```\n?', '', text)
+    # 移除多余的空行
+    text = re.sub(r'\n\s*\n', '\n', text)
+    # 移除首尾空白
+    text = text.strip()
+    return text
 
-输入文本：
+def parse_schedule_info(text):
+    """解析日程信息，返回结构化的数据"""
+    try:
+        logger.info(f"开始处理文本: {text}")
+        
+        # 构建提示词
+        prompt = f"""请从以下文本中提取日程信息，并以JSON格式返回：
 {text}
 
-输出格式（直接填写，不要添加任何其他文字）：
-日程名称：[理解分析内容后，如果有明确的日程名称直接提取，如果有多个任务请概括为一个日程名称]
-时间：[直接提取时间]
-地点：[直接提取地点]
-流程：[理解分析内容后概括一下]
+请提取以下信息：
+1. 事件名称 [理解分析内容后，如果全文只有一个明确的事件名称直接提取，如果有多个任务请概括为一个事件名称]
+2. 时间 [直接提取时间]
+3. 地点 [直接提取地点]
+4. 流程 [理解分析内容后概括一下]
 
-如果某项信息无法提取，请写"无"。"""
+如果某项信息无法提取，请使用null表示。
 
-@app.route('/extract', methods=['POST', 'GET'])
+请直接返回JSON格式，不要有任何其他内容。格式如下：
+{{
+    "event_name": "事件名称",
+    "time": "时间",
+    "location": "地点",
+    "process": "流程"
+}}"""
+
+        logger.debug(f"发送到Ollama的提示词: {prompt}")
+
+        # 调用ollama客户端
+        response = ollama_client.generate(
+            model_name,
+            prompt=prompt,
+            stream=False
+        )
+        
+        # 获取响应文本
+        response_text = response.response
+        logger.debug(f"Ollama原始响应: {response_text}")
+        
+        # 移除<think>标签
+        cleaned_response = remove_think_tags(response_text)
+        logger.debug(f"清理后的响应: {cleaned_response}")
+        
+        # 清理JSON响应
+        json_text = clean_json_response(cleaned_response)
+        logger.debug(f"清理后的JSON文本: {json_text}")
+        
+        # 尝试解析JSON
+        try:
+            schedule_info = json.loads(json_text)
+            logger.info(f"成功解析日程信息: {schedule_info}")
+            return schedule_info
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON解析错误: {str(e)}")
+            return {
+                "error": "无法解析日程信息",
+                "raw_response": cleaned_response
+            }
+            
+    except Exception as e:
+        logger.error(f"处理日程信息时出错: {str(e)}", exc_info=True)
+        return {
+            "error": str(e)
+        }
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/extract', methods=['POST'])
 def extract_info():
     try:
-        # 接收文本
-        text = request.args.get('text')
-        logger.debug(f"Received text: {text}")
+        # 获取请求数据
+        data = request.get_json()
+        logger.info(f"收到请求数据: {data}")
         
+        text = data.get('text')
         if not text:
-            return Response("data: " + json.dumps({'error': 'No text provided'}) + "\n\n", 
-                           mimetype='text/event-stream')
+            logger.warning("未提供文本")
+            return jsonify({
+                "error": "No text provided"
+            })
         
-        def generate():
-            try:
-                # 构建完整的提示词
-                full_prompt = system_prompt.format(text=text)
-                logger.debug(f"Sending prompt to Ollama: {full_prompt}")
-                
-                # 调用ollama客户端
-                response_generator = ollama_client.generate(
-                    model_name,
-                    prompt=full_prompt,
-                    stream=True
-                )
-                
-                # 收集完整的响应
-                full_response = ""
-                for part in response_generator:
-                    response_text = part.response
-                    full_response += response_text
-                
-                # 移除<think>标签及其内容
-                cleaned_response = remove_think_tags(full_response)
-                
-                # 发送清理后的响应
-                data = f"data: {json.dumps({'response': cleaned_response})}\n\n"
-                yield data
-                
-                # 发送结束标记
-                yield "data: [DONE]\n\n"
-                
-            except Exception as e:
-                logger.error(f"Error in generate: {str(e)}", exc_info=True)
-                error_data = f"data: {json.dumps({'error': str(e)})}\n\n"
-                yield error_data
-                yield "data: [DONE]\n\n"
-                
-        resp = Response(generate(), mimetype='text/event-stream')
-        # 设置响应头
-        resp.headers['Cache-Control'] = 'no-cache'
-        resp.headers['Connection'] = 'keep-alive'
-        resp.headers['Access-Control-Allow-Origin'] = '*'
-        resp.headers['X-Accel-Buffering'] = 'no'  # 禁用Nginx缓冲
-
-        return resp
+        # 解析日程信息
+        schedule_info = parse_schedule_info(text)
+        logger.info(f"返回日程信息: {schedule_info}")
+        
+        return jsonify(schedule_info)
+        
     except Exception as e:
-        logger.error(f"Error in extract_info: {str(e)}", exc_info=True)
-        return Response("data: " + json.dumps({'error': str(e)}) + "\n\n", 
-                       mimetype='text/event-stream')
+        logger.error(f"处理请求时出错: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": str(e)
+        })
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8080, host='0.0.0.0')  # 允许外部访问
+    app.run(debug=True, port=8080, host='0.0.0.0')
