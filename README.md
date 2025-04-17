@@ -40,7 +40,7 @@ chat_calender/
 
 1. 启动后端服务：
    ```bash
-   python chat.py
+   python app.py
    ```
    服务将在 http://localhost:8080 运行
 
